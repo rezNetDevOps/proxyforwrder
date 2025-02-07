@@ -10,9 +10,11 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -91,6 +93,76 @@ func checkAllowedDomain(allowedDomain string, next http.Handler) http.Handler {
 		w.Header().Set("Vary", "Origin")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// CertReloader for hot-reloads.
+type CertReloader struct {
+	certPath string
+	keyPath  string
+
+	mu   sync.RWMutex
+	cert *tls.Certificate
+}
+
+// loadCertificate loads the certificate from the file paths.
+func (cr *CertReloader) loadCertificate() error {
+	cert, err := tls.LoadX509KeyPair(cr.certPath, cr.keyPath)
+	if err != nil {
+		return err
+	}
+	cr.mu.Lock()
+	cr.cert = &cert
+	cr.mu.Unlock()
+	log.Println("TLS certificate reloaded")
+	return nil
+}
+
+// GetCertificate is used as the GetCertificate callback for tls.Config.
+func (cr *CertReloader) GetCertificate(clientHello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	cr.mu.RLock()
+	defer cr.mu.RUnlock()
+	if cr.cert == nil {
+		return nil, nil
+	}
+	return cr.cert, nil
+}
+
+// watchCertificates sets up a file watcher to reload certs on change.
+func (cr *CertReloader) watchCertificates() error {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+	// Watch both certificate and key files.
+	for _, file := range []string{cr.certPath, cr.keyPath} {
+		if err := watcher.Add(file); err != nil {
+			return err
+		}
+	}
+	go func() {
+		defer watcher.Close()
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				// If the file is modified, reload certificate.
+				if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove|fsnotify.Rename) != 0 {
+					log.Printf("Detected change in %s, reloading certificate...", event.Name)
+					if err := cr.loadCertificate(); err != nil {
+						log.Printf("Error reloading certificate: %v", err)
+					}
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Printf("Watcher error: %v", err)
+			}
+		}
+	}()
+	return nil
 }
 
 func main() {
