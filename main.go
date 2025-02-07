@@ -262,9 +262,11 @@ func main() {
 	// Wrap the handler with the domain check middleware.
 	finalHandler := checkAllowedDomain(allowedDomain, handler)
 
+	loggedHandler := loggingMiddleware(finalHandler)
+
 	// Create an HTTP mux and register the proxy and Prometheus metrics endpoints.
 	mux := http.NewServeMux()
-	mux.Handle("/", finalHandler)
+	mux.Handle("/", loggedHandler)
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/healthz", healthHandler)
 
