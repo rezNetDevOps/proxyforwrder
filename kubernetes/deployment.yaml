@@ -1,0 +1,76 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: supabase-proxy-svc
+  labels:
+    app: supabase-proxy
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 443
+    targetPort: 443
+    protocol: TCP
+    name: https
+  selector:
+    app: supabase-proxy
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: supabase-proxy
+  labels:
+    app: supabase-proxy
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: supabase-proxy
+  template:
+    metadata:
+      labels:
+        app: supabase-proxy
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "443"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: supabase-proxy
+        image: your-docker-registry/supabase-proxy:latest
+        ports:
+        - containerPort: 443
+        env:
+        - name: LISTEN_ADDR
+          value: ":443"
+        - name: ALLOWED_DOMAIN
+          value: "api.yourdomain.com"
+        - name: SUPABASE_TARGET_DOMAIN
+          value: "https://your-supabase-domain.supabase.co"
+        - name: ENFORCE_HTTPS
+          value: "true"
+        - name: TLS_CERT_FILE
+          value: "/tls/tls.crt"
+        - name: TLS_KEY_FILE
+          value: "/tls/tls.key"
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 443
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 443
+            scheme: HTTPS
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        volumeMounts:
+        - name: tls-certs
+          mountPath: /tls
+          readOnly: true
+      volumes:
+      - name: tls-certs
+        secret:
+          secretName: supabase-proxy-tls

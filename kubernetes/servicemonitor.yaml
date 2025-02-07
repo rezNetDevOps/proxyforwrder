@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: supabase-proxy-monitor
+  namespace: default
+  labels:
+    release: prometheus-operator
+spec:
+  selector:
+    matchLabels:
+      app: supabase-proxy
+  endpoints:
+  - port: https
+    interval: 15s
+    path: /metrics
+    scheme: HTTPS
+    tlsConfig:
+      insecureSkipVerify: true  # Set to false if using trusted certs.
