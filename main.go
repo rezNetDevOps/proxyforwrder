@@ -74,6 +74,14 @@ func getEnv(key, defaultVal string) string {
 	return defaultVal
 }
 
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Log details: timestamp, method, URL, client IP.
+		log.Printf("[ACCESS] %s - %s %s from %s", time.Now().Format(time.RFC3339), r.Method, r.URL.String(), r.RemoteAddr)
+		next.ServeHTTP(w, r)
+	})
+}
+
 func checkAllowedDomain(allowedDomain string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check the Host header.
