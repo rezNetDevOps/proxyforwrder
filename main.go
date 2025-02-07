@@ -225,6 +225,11 @@ func main() {
 		req.Header.Set("X-Forwarded-Host", allowedDomain)
 	}
 
+	// Health endpoint.
+	healthHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
 	// Main handler that instruments the total request latency.
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -241,6 +246,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", finalHandler)
 	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/healthz", healthHandler)
 
 	// Create the HTTP server with appropriate timeouts.
 	srv := &http.Server{
