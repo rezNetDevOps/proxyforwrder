@@ -217,12 +217,24 @@ func main() {
 	}
 	proxy.Transport = &instrumentedRoundTripper{rt: proxy.Transport}
 
-	// Optionally adjust the Director for add custom headers.
+	// Set the Host header for the outgoing request so that Supabase sees its expected domain.
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
-		// Example: add an X-Forwarded-Host header if needed.
+		// Override Host header to target's host.
+		req.Host = targetURL.Host
+		// Also set X-Forwarded-Host to your allowed domain.
 		req.Header.Set("X-Forwarded-Host", allowedDomain)
+	}
+
+	// Add ModifyResponse to rewrite response headers (e.g., Location) from Supabase.
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		if loc := resp.Header.Get("Location"); loc != "" {
+			// Replace the upstream domain with your allowed domain in the Location header.
+			newLoc := strings.ReplaceAll(loc, targetURL.Host, allowedDomain)
+			resp.Header.Set("Location", newLoc)
+		}
+		return nil
 	}
 
 	// Health endpoint.
