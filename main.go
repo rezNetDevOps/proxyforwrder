@@ -188,6 +188,27 @@ func main() {
 		log.Fatal("ENFORCE_HTTPS is true but TLS_CERT_FILE or TLS_KEY_FILE is not set; failing fast.")
 	}
 
+	// Set up certificate reloader.
+	var certReloader *CertReloader
+	if tlsCertFile != "" && tlsKeyFile != "" {
+		certReloader = &CertReloader{
+			certPath: tlsCertFile,
+			keyPath:  tlsKeyFile,
+		}
+		// Initial load – if it fails and HTTPS is required, exit.
+		if err := certReloader.loadCertificate(); err != nil {
+			if enforceHTTPS {
+				log.Fatalf("Failed to load TLS certificate: %v", err)
+			} else {
+				log.Printf("Warning: failed to load TLS certificate, falling back to HTTP: %v", err)
+			}
+		}
+		// Start watching for certificate changes.
+		if err := certReloader.watchCertificates(); err != nil {
+			log.Fatalf("Failed to watch TLS certificate files: %v", err)
+		}
+	}
+
 	// Create a reverse proxy to the Supabase target.
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 	// Wrap the default transport to instrument upstream latency.
@@ -230,21 +251,36 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	// TLS configuration: cert-manager will typically mount certificates as files.
-	tlsCertFile := os.Getenv("TLS_CERT_FILE")
-	tlsKeyFile := os.Getenv("TLS_KEY_FILE")
-	if tlsCertFile != "" && tlsKeyFile != "" {
+	// Configure TLS if certReloader is available.
+	if certReloader != nil {
 		srv.TLSConfig = &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			// TODO: Add further TLS configuration as needed.
+			MinVersion:     tls.VersionTLS12,
+			GetCertificate: certReloader.GetCertificate,
 		}
 		log.Printf("Starting HTTPS proxy on %s (allowed domain %s), forwarding to %s", listenAddr, allowedDomain, targetURLStr)
 		go func() {
-			if err := srv.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != nil && err != http.ErrServerClosed {
+			if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("ListenAndServeTLS error: %v", err)
 			}
 		}()
+		// Optionally, run a separate HTTP server to redirect to HTTPS.
+		go func() {
+			httpAddr := ":80"
+			redirectMux := http.NewServeMux()
+			redirectMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				target := "https://" + r.Host + r.RequestURI
+				http.Redirect(w, r, target, http.StatusPermanentRedirect)
+			})
+			log.Printf("Starting HTTP redirect server on %s", httpAddr)
+			if err := http.ListenAndServe(httpAddr, redirectMux); err != nil {
+				log.Fatalf("HTTP redirect server error: %v", err)
+			}
+		}()
 	} else {
+		// If no certificate, fail fast if enforcement is enabled.
+		if enforceHTTPS {
+			log.Fatal("ENFORCE_HTTPS is true but TLS certificates are not loaded. Exiting.")
+		}
 		log.Printf("Starting HTTP proxy on %s (allowed domain %s), forwarding to %s", listenAddr, allowedDomain, targetURLStr)
 		go func() {
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
