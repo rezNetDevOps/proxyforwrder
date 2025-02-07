@@ -180,6 +180,14 @@ func main() {
 		log.Fatalf("Invalid SUPABASE_TARGET_DOMAIN: %v", err)
 	}
 
+	// Enforce HTTPS if required.
+	enforceHTTPS := strings.EqualFold(getEnv("ENFORCE_HTTPS", "false"), "true")
+	tlsCertFile := os.Getenv("TLS_CERT_FILE")
+	tlsKeyFile := os.Getenv("TLS_KEY_FILE")
+	if enforceHTTPS && (tlsCertFile == "" || tlsKeyFile == "") {
+		log.Fatal("ENFORCE_HTTPS is true but TLS_CERT_FILE or TLS_KEY_FILE is not set; failing fast.")
+	}
+
 	// Create a reverse proxy to the Supabase target.
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 	// Wrap the default transport to instrument upstream latency.
