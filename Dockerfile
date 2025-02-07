@@ -1,15 +1,14 @@
-# --- Build stage ---
-FROM golang:1.20-alpine AS builder
+FROM golang:1.23-bullseye AS builder
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates
+RUN apt-get update && apt-get install -y ca-certificates
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o proxy .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o proxy .
 
 # --- Final stage ---
 FROM alpine:3.16
@@ -19,5 +18,4 @@ WORKDIR /app
 COPY --from=builder /app/proxy .
 
 EXPOSE 443
-
 CMD ["./proxy"]
