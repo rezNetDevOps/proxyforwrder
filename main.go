@@ -260,23 +260,31 @@ func main() {
 	})
 
 	// Wrap the handler with the domain check middleware.
-	finalHandler := checkAllowedDomain(allowedDomain, handler)
+	finalHandler := loggingMiddleware(checkAllowedDomain(allowedDomain, handler))
 
-	loggedHandler := loggingMiddleware(finalHandler)
-
-	// Create an HTTP mux and register the proxy and Prometheus metrics endpoints.
-	mux := http.NewServeMux()
-	mux.Handle("/", loggedHandler)
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/healthz", healthHandler)
+	publicMux := http.NewServeMux()
+	publicMux.Handle("/", finalHandler)
 
 	// Create the HTTP server with appropriate timeouts.
 	srv := &http.Server{
 		Addr:         listenAddr,
-		Handler:      mux,
+		Handler:      publicMux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
+	}
+
+	// Start a separate internal server for metrics and health endpoints.
+	metricsAddr := getEnv("METRICS_ADDR", ":9100")
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.Handler())
+	metricsMux.Handle("/healthz", healthHandler)
+	metricsSrv := &http.Server{
+		Addr:         metricsAddr,
+		Handler:      metricsMux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  30 * time.Second,
 	}
 
 	// Configure TLS if certReloader is available.
@@ -316,6 +324,14 @@ func main() {
 			}
 		}()
 	}
+
+	// Start the metrics server (internal only).
+	go func() {
+		log.Printf("Starting internal metrics server on %s", metricsAddr)
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Metrics server error: %v", err)
+		}
+	}()
 
 	// graceful shutdown.
 	stop := make(chan os.Signal, 1)

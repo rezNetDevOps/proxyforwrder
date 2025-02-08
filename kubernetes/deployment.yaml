@@ -11,6 +11,26 @@ spec:
     targetPort: 443
     protocol: TCP
     name: https
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  selector:
+    app: supabase-proxy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supabase-proxy-metrics
+  labels:
+    app: supabase-proxy
+spec:
+  type: ClusterIP
+  ports:
+  - port: 9100
+    targetPort: 9100
+    protocol: TCP
+    name: metrics
   selector:
     app: supabase-proxy
 ---
@@ -31,7 +51,7 @@ spec:
         app: supabase-proxy
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "443"
+        prometheus.io/port: "9100"
         prometheus.io/path: "/metrics"
     spec:
       containers:
@@ -39,6 +59,11 @@ spec:
         image: your-docker-registry/supabase-proxy:latest
         ports:
         - containerPort: 443
+          name: https
+        - containerPort: 80
+          name: http
+        - containerPort: 9100
+          name: metrics
         env:
         - name: LISTEN_ADDR
           value: ":443"

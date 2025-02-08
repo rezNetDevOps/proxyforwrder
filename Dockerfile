@@ -17,5 +17,6 @@ WORKDIR /app
 
 COPY --from=builder /app/proxy .
 
-EXPOSE 443
+EXPOSE 80 443 9100
+
 CMD ["./proxy"]
