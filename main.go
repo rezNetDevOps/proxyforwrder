@@ -289,7 +289,7 @@ func main() {
 		totalLatency.WithLabelValues(r.Method, r.URL.Path, http.StatusText(rw.statusCode)).Observe(duration.Seconds())
 	})
 
-	allowedPaths := []string{"/function/v1/", "/rest/v1/", "/auth/v1/"}
+	allowedPaths := []string{"/functions/v1/", "/rest/v1/", "/auth/v1/"}
 
 	// finalHandler := loggingMiddleware(checkAllowedDomain(allowedDomain, handler))
 	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
