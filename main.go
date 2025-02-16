@@ -17,6 +17,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/time/rate"
 )
 
 // Define Prometheus metrics for latency tracking.
@@ -74,10 +75,39 @@ func getEnv(key, defaultVal string) string {
 	return defaultVal
 }
 
+func allowedPathsMiddleware(allowedPaths []string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		allowed := false
+		for _, prefix := range allowedPaths {
+			if strings.HasPrefix(r.URL.Path, prefix) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			http.Error(w, "Not Found", http.StatusNotFound)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Log details: timestamp, method, URL, client IP.
 		log.Printf("[ACCESS] %s - %s %s from %s", time.Now().Format(time.RFC3339), r.Method, r.URL.String(), r.RemoteAddr)
+		next.ServeHTTP(w, r)
+	})
+}
+
+var globalLimiter = rate.NewLimiter(10, 20) // 10 requests per second with a burst of 20; adjust as needed.
+
+func rateLimitMiddleware(limiter *rate.Limiter, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !limiter.Allow() {
+			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -259,8 +289,12 @@ func main() {
 		totalLatency.WithLabelValues(r.Method, r.URL.Path, http.StatusText(rw.statusCode)).Observe(duration.Seconds())
 	})
 
-	// Wrap the handler with the domain check middleware.
-	finalHandler := loggingMiddleware(checkAllowedDomain(allowedDomain, handler))
+	allowedPaths := []string{"/function/v1/", "/rest/v1/", "/auth/v1/"}
+
+	// finalHandler := loggingMiddleware(checkAllowedDomain(allowedDomain, handler))
+	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		loggingMiddleware(checkAllowedDomain(allowedDomain, rateLimitMiddleware(globalLimiter, allowedPathsMiddleware(allowedPaths, handler)))).ServeHTTP(w, r)
+	})
 
 	publicMux := http.NewServeMux()
 	publicMux.Handle("/", finalHandler)
