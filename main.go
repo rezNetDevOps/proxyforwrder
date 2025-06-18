@@ -359,19 +359,24 @@ func main() {
 				log.Fatalf("ListenAndServeTLS error: %v", err)
 			}
 		}()
-		// Run HTTP redirect server to ensure HTTPS is used
-		go func() {
-			httpAddr := ":80"
-			redirectMux := http.NewServeMux()
-			redirectMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-				target := "https://" + r.Host + r.RequestURI
-				http.Redirect(w, r, target, http.StatusPermanentRedirect)
-			})
-			log.Printf("Starting HTTP redirect server on %s", httpAddr)
-			if err := http.ListenAndServe(httpAddr, redirectMux); err != nil {
-				log.Fatalf("HTTP redirect server error: %v", err)
-			}
-		}()
+		// Run HTTP redirect server to ensure HTTPS is used, unless disabled
+		disableRedirect := strings.EqualFold(getEnv("DISABLE_HTTP_REDIRECT", "false"), "true")
+		if !disableRedirect {
+			go func() {
+				httpAddr := ":80"
+				redirectMux := http.NewServeMux()
+				redirectMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+					target := "https://" + r.Host + r.RequestURI
+					http.Redirect(w, r, target, http.StatusPermanentRedirect)
+				})
+				log.Printf("Starting HTTP redirect server on %s", httpAddr)
+				if err := http.ListenAndServe(httpAddr, redirectMux); err != nil {
+					log.Fatalf("HTTP redirect server error: %v", err)
+				}
+			}()
+		} else {
+			log.Printf("HTTP redirect server is disabled")
+		}
 	} else {
 		// HTTP-only mode (less secure, but useful for development or behind another TLS terminator)
 		if enforceHTTPS {
