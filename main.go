@@ -313,7 +313,7 @@ func main() {
 	})
 
 	// Define allowed API paths for security
-	allowedPaths := []string{"/functions/v1/", "/rest/v1/", "/auth/v1/"}
+	allowedPaths := []string{"/", "/functions/v1/", "/rest/v1/", "/auth/v1/"}
 
 	// Chain all middleware to create the final handler
 	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
