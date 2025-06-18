@@ -1,3 +1,6 @@
+// Package main implements a secure reverse proxy for Supabase services with features such as
+// rate limiting, domain validation, access control, TLS support with hot-reloading,
+// and metrics collection.
 package main
 
 import (
@@ -22,12 +25,14 @@ import (
 
 // Define Prometheus metrics for latency tracking.
 var (
+	// totalLatency measures the end-to-end request duration from client perspective
 	totalLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "proxy_request_duration_seconds",
 		Help:    "Total duration (in seconds) for proxy requests from client perspective",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"method", "path", "status"})
 
+	// upstreamLatency measures the time taken to receive response from Supabase
 	upstreamLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "proxy_upstream_duration_seconds",
 		Help:    "Duration (in seconds) for upstream (Supabase) requests to complete",
@@ -35,15 +40,19 @@ var (
 	}, []string{"method", "path", "status"})
 )
 
+// init registers Prometheus metrics collectors
 func init() {
 	prometheus.MustRegister(totalLatency, upstreamLatency)
 }
 
 // instrumentedRoundTripper wraps an http.RoundTripper to measure upstream latency.
+// This allows us to track how long the backend takes to respond independently of
+// client-side connection time.
 type instrumentedRoundTripper struct {
 	rt http.RoundTripper
 }
 
+// RoundTrip implements the http.RoundTripper interface and records metrics for each request
 func (irt *instrumentedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	start := time.Now()
 	resp, err := irt.rt.RoundTrip(req)
@@ -56,18 +65,19 @@ func (irt *instrumentedRoundTripper) RoundTrip(req *http.Request) (*http.Respons
 	return resp, err
 }
 
-// statusResponseWriter captures the HTTP status code.
+// statusResponseWriter captures the HTTP status code to be used for metrics
 type statusResponseWriter struct {
 	http.ResponseWriter
 	statusCode int
 }
 
+// WriteHeader overrides the http.ResponseWriter method to capture status codes
 func (w *statusResponseWriter) WriteHeader(code int) {
 	w.statusCode = code
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// getEnv returns the value of an environment variable or a default.
+// getEnv returns the value of an environment variable or a default value if not set
 func getEnv(key, defaultVal string) string {
 	if val, exists := os.LookupEnv(key); exists {
 		return val
@@ -75,6 +85,8 @@ func getEnv(key, defaultVal string) string {
 	return defaultVal
 }
 
+// allowedPathsMiddleware restricts access to only specified API paths
+// This is a security feature that prevents access to unintended endpoints
 func allowedPathsMiddleware(allowedPaths []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		allowed := false
@@ -92,6 +104,7 @@ func allowedPathsMiddleware(allowedPaths []string, next http.Handler) http.Handl
 	})
 }
 
+// loggingMiddleware logs details of each request for monitoring and debugging
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Log details: timestamp, method, URL, client IP.
@@ -100,8 +113,10 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// globalLimiter controls the overall rate of requests to prevent abuse
 var globalLimiter = rate.NewLimiter(10, 20) // 10 requests per second with a burst of 20; adjust as needed.
 
+// rateLimitMiddleware implements rate limiting to protect backend services
 func rateLimitMiddleware(limiter *rate.Limiter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !limiter.Allow() {
@@ -112,6 +127,8 @@ func rateLimitMiddleware(limiter *rate.Limiter, next http.Handler) http.Handler 
 	})
 }
 
+// checkAllowedDomain enforces that requests come only from authorized domains
+// This prevents domain spoofing and improves security
 func checkAllowedDomain(allowedDomain string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check the Host header.
@@ -133,7 +150,8 @@ func checkAllowedDomain(allowedDomain string, next http.Handler) http.Handler {
 	})
 }
 
-// CertReloader for hot-reloads.
+// CertReloader handles hot-reloading of TLS certificates without server restarts
+// This enables certificate renewals without downtime
 type CertReloader struct {
 	certPath string
 	keyPath  string
@@ -142,7 +160,7 @@ type CertReloader struct {
 	cert *tls.Certificate
 }
 
-// loadCertificate loads the certificate from the file paths.
+// loadCertificate loads the certificate from the file paths
 func (cr *CertReloader) loadCertificate() error {
 	cert, err := tls.LoadX509KeyPair(cr.certPath, cr.keyPath)
 	if err != nil {
@@ -155,7 +173,8 @@ func (cr *CertReloader) loadCertificate() error {
 	return nil
 }
 
-// GetCertificate is used as the GetCertificate callback for tls.Config.
+// GetCertificate is used as the GetCertificate callback for tls.Config
+// This allows the server to use the latest certificate without restarting
 func (cr *CertReloader) GetCertificate(clientHello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	cr.mu.RLock()
 	defer cr.mu.RUnlock()
@@ -165,7 +184,8 @@ func (cr *CertReloader) GetCertificate(clientHello *tls.ClientHelloInfo) (*tls.C
 	return cr.cert, nil
 }
 
-// watchCertificates sets up a file watcher to reload certs on change.
+// watchCertificates sets up a file watcher to reload certs on change
+// This enables automatic detection of certificate updates
 func (cr *CertReloader) watchCertificates() error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -203,7 +223,9 @@ func (cr *CertReloader) watchCertificates() error {
 	return nil
 }
 
+// main is the entry point for the application
 func main() {
+	// Load configuration from environment variables
 	listenAddr := getEnv("LISTEN_ADDR", ":443")
 	allowedDomain := os.Getenv("ALLOWED_DOMAIN")
 	if allowedDomain == "" {
@@ -218,7 +240,7 @@ func main() {
 		log.Fatalf("Invalid SUPABASE_TARGET_DOMAIN: %v", err)
 	}
 
-	// Enforce HTTPS if required.
+	// TLS configuration
 	enforceHTTPS := strings.EqualFold(getEnv("ENFORCE_HTTPS", "false"), "true")
 	tlsCertFile := os.Getenv("TLS_CERT_FILE")
 	tlsKeyFile := os.Getenv("TLS_KEY_FILE")
@@ -226,7 +248,7 @@ func main() {
 		log.Fatal("ENFORCE_HTTPS is true but TLS_CERT_FILE or TLS_KEY_FILE is not set; failing fast.")
 	}
 
-	// Set up certificate reloader.
+	// Configure certificate reloader for TLS
 	var certReloader *CertReloader
 	if tlsCertFile != "" && tlsKeyFile != "" {
 		certReloader = &CertReloader{
@@ -247,15 +269,16 @@ func main() {
 		}
 	}
 
-	// Create a reverse proxy to the Supabase target.
+	// Create a reverse proxy to the Supabase target
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-	// Wrap the default transport to instrument upstream latency.
+
+	// Instrument the transport to measure upstream latency
 	if proxy.Transport == nil {
 		proxy.Transport = http.DefaultTransport
 	}
 	proxy.Transport = &instrumentedRoundTripper{rt: proxy.Transport}
 
-	// Set the Host header for the outgoing request so that Supabase sees its expected domain.
+	// Configure the Director to properly set request headers for Supabase
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
@@ -265,7 +288,7 @@ func main() {
 		req.Header.Set("X-Forwarded-Host", allowedDomain)
 	}
 
-	// Add ModifyResponse to rewrite response headers (e.g., Location) from Supabase.
+	// Rewrite response headers from Supabase to use our domain
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		if loc := resp.Header.Get("Location"); loc != "" {
 			// Replace the upstream domain with your allowed domain in the Location header.
@@ -275,12 +298,12 @@ func main() {
 		return nil
 	}
 
-	// Health endpoint.
+	// Simple health check endpoint
 	healthHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
 
-	// Main handler that instruments the total request latency.
+	// Main handler with instrumentation for total request latency
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rw := &statusResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
@@ -289,17 +312,19 @@ func main() {
 		totalLatency.WithLabelValues(r.Method, r.URL.Path, http.StatusText(rw.statusCode)).Observe(duration.Seconds())
 	})
 
+	// Define allowed API paths for security
 	allowedPaths := []string{"/functions/v1/", "/rest/v1/", "/auth/v1/"}
 
-	// finalHandler := loggingMiddleware(checkAllowedDomain(allowedDomain, handler))
+	// Chain all middleware to create the final handler
 	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		loggingMiddleware(checkAllowedDomain(allowedDomain, rateLimitMiddleware(globalLimiter, allowedPathsMiddleware(allowedPaths, handler)))).ServeHTTP(w, r)
 	})
 
+	// Set up the public-facing router
 	publicMux := http.NewServeMux()
 	publicMux.Handle("/", finalHandler)
 
-	// Create the HTTP server with appropriate timeouts.
+	// Create the main HTTP server with appropriate timeouts for security and stability
 	srv := &http.Server{
 		Addr:         listenAddr,
 		Handler:      publicMux,
@@ -308,7 +333,7 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	// Start a separate internal server for metrics and health endpoints.
+	// Set up a separate internal metrics server (not publicly accessible)
 	metricsAddr := getEnv("METRICS_ADDR", ":9100")
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", promhttp.Handler())
@@ -321,8 +346,9 @@ func main() {
 		IdleTimeout:  30 * time.Second,
 	}
 
-	// Configure TLS if certReloader is available.
+	// Start servers based on TLS configuration
 	if certReloader != nil {
+		// Configure TLS with minimum security standards
 		srv.TLSConfig = &tls.Config{
 			MinVersion:     tls.VersionTLS12,
 			GetCertificate: certReloader.GetCertificate,
@@ -333,7 +359,7 @@ func main() {
 				log.Fatalf("ListenAndServeTLS error: %v", err)
 			}
 		}()
-		// Optionally, run a separate HTTP server to redirect to HTTPS.
+		// Run HTTP redirect server to ensure HTTPS is used
 		go func() {
 			httpAddr := ":80"
 			redirectMux := http.NewServeMux()
@@ -347,7 +373,7 @@ func main() {
 			}
 		}()
 	} else {
-		// If no certificate, fail fast if enforcement is enabled.
+		// HTTP-only mode (less secure, but useful for development or behind another TLS terminator)
 		if enforceHTTPS {
 			log.Fatal("ENFORCE_HTTPS is true but TLS certificates are not loaded. Exiting.")
 		}
@@ -359,7 +385,7 @@ func main() {
 		}()
 	}
 
-	// Start the metrics server (internal only).
+	// Start the internal metrics server
 	go func() {
 		log.Printf("Starting internal metrics server on %s", metricsAddr)
 		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -367,7 +393,7 @@ func main() {
 		}
 	}()
 
-	// graceful shutdown.
+	// Set up graceful shutdown on system signals
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
